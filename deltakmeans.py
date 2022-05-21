@@ -101,8 +101,9 @@ class DeltaKmeans():
         if self.old_centroids is None:
             return False
 
-        if np.linalg.norm(self.centroids-self.old_centroids, ord='fro') >= self.sc_tresh:
-            return False
+        with np.errstate(divide='ignore'):
+            if np.linalg.norm(self.centroids-self.old_centroids, ord='fro') >= self.sc_tresh:
+                return False
         
         return True
     

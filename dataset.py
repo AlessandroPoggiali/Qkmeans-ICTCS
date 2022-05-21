@@ -10,7 +10,7 @@ font = {'size'   : 22}
 
 plt.rc('font', **font)
 
-n_samlpes = 150
+n_samlpes = 1500
 
 class Dataset:
     
@@ -124,16 +124,16 @@ class Dataset:
         if conf is not None:
             if algorithm == 'qkmeans':
                 plt.title("K = " + str(conf["K"]) + ", M = " + str(self.M) + ", N = " + 
-                          str(self.N) + ", M1 = " + str(conf["M1"]), fontdict = {'fontsize' : 30})
-                plt.suptitle('q-kmeans')
+                          str(self.N), fontdict = {'fontsize' : 30})
+                plt.suptitle('q-k-Means')
             elif algorithm == 'deltakmeans': 
                 plt.title("K = " + str(conf["K"]) + ", M = " + str(self.M) + ", N = " + 
                           str(self.N) + ", delta = " + str(conf["delta"]), fontdict = {'fontsize' : 30})
-                plt.suptitle('delta-kmeans')
+                plt.suptitle('delta-k-Means')
             else:
                 plt.title("K = " + str(conf["K"]) + ", M = " + str(self.M) + ", N = " + 
                           str(self.N), fontdict = {'fontsize' : 30})
-                plt.suptitle('kmeans')
+                plt.suptitle('k-Means')
         
         if filename is not None:
             plt.savefig(filename)

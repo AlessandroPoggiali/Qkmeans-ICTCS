@@ -27,18 +27,13 @@ class QKMeans():
     def __init__(self, dataset, conf):
         
         self.K = conf['K']
-        self.M1 = conf['M1']
         self.dataset_name = conf['dataset_name']
         self.sc_tresh = conf['sc_tresh']
         self.max_iterations = conf['max_iterations']
         if conf['shots'] is None:
-            if self.M1 is None:
                 self.shots = 8192
-            else:
-                self.shots = min(self.K * self.M1 * 1024, 500000)
         else:
             self.shots = conf['shots']
-        self.quantization = conf['quantization']
         self.dataset = dataset
         self.data = self.dataset.df
         self.N = self.dataset.N
@@ -61,13 +56,13 @@ class QKMeans():
         
 
     """
-    computing_cluster_1: 
+    computing_cluster: 
     
     Computes the quantum distances between all records and all centroids "sequentially"
         
     :provider (optional, default value=None): real quantum hardware
     """
-    def computing_cluster_1(self, provider=None):
+    def computing_cluster(self, provider=None):
     
         distances = []                         # list of distances: the i-th item is a list of distances between i-th vector and all centroids 
         
@@ -153,288 +148,6 @@ class QKMeans():
         self.cluster_assignment = [(i.index(min(i))) for i in distances] # for each vector takes the closest centroid to perform the assignemnt
         
         return tot_execution_time
-
-
-    """
-    computing_cluster_2: 
-    
-    Computes the quantum assignment of a record to the set of centroids for every record
-        
-    :provider (optional, default value=None): real quantum hardware
-    """
-    def computing_cluster_2(self, provider=None):
-        
-        N = self.N
-        K = self.K
-        
-        Aknn_qbits = 1                         # number of qbits for distance ancilla
-        I_qbits = math.ceil(math.log(N,2))     # number of qubits needed to index the features
-        if K == 1:
-            C_qbits = 1
-        else:
-            C_qbits = math.ceil(math.log(K,2))     # number of qbits needed for indexing all centroids
-        Rqram_qbits = 1                        # number of qbits for qram register
-        Aqram_qbits = I_qbits + C_qbits + Aknn_qbits - 2 # number of qbits for qram ancillas
-        self.max_qbits = I_qbits + C_qbits + Aknn_qbits + Rqram_qbits + Aqram_qbits
-        #print("total qbits needed:  " + str(Tot_qbits))
-        
-        a = QuantumRegister(Aknn_qbits, 'a')   # ancilla qubit for distance
-        i = QuantumRegister(I_qbits, 'i')      # feature index
-        c = QuantumRegister(C_qbits, 'c')      # cluster
-        r = QuantumRegister(1, 'r')            # rotation qubit for vector's features
-        if Aqram_qbits > 0:
-            q = QuantumRegister(Aqram_qbits, 'q')  # qram ancilla
-    
-        classical_bit = C_qbits + 2            # C_qbits for clusters + 1 for measuring ancilla + 1 for measuring register    
-        outcome = ClassicalRegister(classical_bit, 'bit')  # for measuring
-        
-        cluster_assignment = []
-        
-        tot_execution_time = 0
-        
-        for index_v, vector in self.dataset.df.iterrows():
-            
-            if Aqram_qbits > 0:
-                circuit = QuantumCircuit(a, i, r, q, c, outcome)
-            else:
-                circuit = QuantumCircuit(a, i, r, c, outcome)
-                q = None
-            
-            circuit.h(a)
-            circuit.h(i)
-            circuit.h(c)
-            
-    
-            #--------------------- data vetcor encoding  -----------------------------#
-    
-            encodeVector(circuit, vector, i, a[:]+i[:], r[0], q)
-    
-            #-------------------------------------------------------------------------#
-    
-            circuit.x(a)
-            circuit.barrier()
-    
-            #--------------- centroid vectors encoding -------------------------------#
-    
-            buildCentroidState(self.centroids, circuit, a, i, c, r, q)
-    
-            #----------------------------------------------------------------#
-            circuit.measure(r, outcome[0])
-    
-            circuit.h(a) 
-    
-            circuit.measure(a, outcome[1])
-             
-            for b in range(C_qbits):
-                circuit.measure(c[b], outcome[b+2])
-            
-            shots = self.shots
-            if provider is not None:
-                large_enough_devices = provider.backends(filters=lambda x: x.configuration().n_qubits > 4 and not x.configuration().simulator)
-                backend = least_busy(large_enough_devices)
-                job = execute(circuit, backend, shots=shots)
-                job_monitor(job)
-                result = job.result()
-                execution_time = result.time_taken
-                tot_execution_time += execution_time
-                print("executed in: " + str(execution_time))
-                counts = result.get_counts(circuit)
-            else:
-                simulator = Aer.get_backend('qasm_simulator')
-                job = execute(circuit, simulator, shots=shots)
-                result = job.result()
-                counts = result.get_counts(circuit)
-            #print("\nTotal counts are:",counts)
-            #plot_histogram(counts)
-            goodCounts = {k: counts[k] for k in counts.keys() if k.endswith('01')} # register 1 and ancilla 0
-            cluster = max(goodCounts, key=goodCounts.get)
-            print(goodCounts)
-            cluster = int(cluster[:C_qbits], 2)
-            
-            if cluster >= K:
-                cluster = 0 
-            cluster_assignment.append(cluster)
-            print("assigned to cluster: " + str(cluster))
-             
-
-        self.cluster_assignment = cluster_assignment 
-        
-        return tot_execution_time
-    
-    """
-    computing_cluster_3: 
-    
-    Compute the cluster assignment of every record to centroids
-        
-    :check_prob (optional, default value=None): if True the method returns the post selection probability
-    """
-    def computing_cluster_3(self, check_prob=False):
-         
-        if check_prob:
-            r1_list = []
-            a0_list = []
-        
-        N = self.N
-        M = self.M
-        K = self.K
-        M1 = self.M1
-        
-        Aknn_qbits = 1                         # number of qbits for distance ancilla
-        I_qbits = math.ceil(math.log(N,2))     # number of qubits needed to index the features
-        if K == 1:
-            C_qbits = 1
-        else:
-            C_qbits = math.ceil(math.log(K,2))     # number of qbits needed for indexing all centroids
-        Rqram_qbits = 1                        # number of qbits for qram register
-        
-        a = QuantumRegister(Aknn_qbits, 'a')   # ancilla qubit for distance
-        i = QuantumRegister(I_qbits, 'i')      # feature index
-        c = QuantumRegister(C_qbits, 'c')      # cluster
-        r = QuantumRegister(1, 'r')            # rotation qubit for vector's features
-        
-        self.n_circuits = math.ceil(M/M1)
-        
-        #print("circuits needed:  " + str(n_circuits))
-        
-        cluster_assignment = []
-        
-        for j in range(self.n_circuits):
-            
-            #print("Circuit " + str(j+1) + "/" + str(self.n_circuits))
-            
-            vectors = self.data[j*M1:(j+1)*M1]
-            
-            if j == self.n_circuits-1:
-                M1 = M-M1*(self.n_circuits-1)
-                
-            #print("vectors to classify: " + str(M1))
-            #print("shots: " + str(self.shots))
-                
-            QRAMINDEX_qbits = math.ceil(math.log(M1,2))     # number of qubits needed to index the qrams (i.e 'test' vectors)
-            
-            if QRAMINDEX_qbits == 0: # se mi rimane solo un record da assegnare ad un cluster tengo comunque un qubit per qrama anche se non mi serve
-                QRAMINDEX_qbits = 1
-            
-            Aqram_qbits = I_qbits + C_qbits + QRAMINDEX_qbits + Aknn_qbits - 2 # number of qbits for qram ancillas
-            if C_qbits > QRAMINDEX_qbits:
-                Aqram_qbits = Aqram_qbits - QRAMINDEX_qbits
-            else:
-                Aqram_qbits = Aqram_qbits - C_qbits
-            tot_qbits = I_qbits + C_qbits + Aknn_qbits + Rqram_qbits + Aqram_qbits + QRAMINDEX_qbits
-            if j == 0:
-                self.max_qbits = tot_qbits
-            #print("total qbits needed for this circuit:  " + str(Tot_qbits))
-            
-            qramindex = QuantumRegister(QRAMINDEX_qbits,'qramindex')     # index for qrams           
-    
-            classical_bit = C_qbits + QRAMINDEX_qbits  + 2  # C_qbits for clusters + QRAMINDEX_qbits for qram + 1 for ancilla + 1 for register    
-            outcome = ClassicalRegister(classical_bit, 'bit')  # for measuring
-                
-            if Aqram_qbits > 0:
-                q = QuantumRegister(Aqram_qbits, 'q')  # qram ancilla
-                circuit = QuantumCircuit(a, i, r, q, c, qramindex, outcome)
-            else:
-                circuit = QuantumCircuit(a, i, r, c, qramindex, outcome)
-                q = None
-    
-            circuit.h(a)
-            circuit.h(i)
-            circuit.h(c)
-            circuit.h(qramindex)
-    
-    
-            #--------------------- data vetcor encoding  -----------------------------#
-    
-            buildVectorsState(vectors, circuit, a, i, qramindex, r, q)
-    
-            #-------------------------------------------------------------------------#
-    
-            circuit.x(a)
-            circuit.barrier()
-    
-            #--------------- centroid vectors encoding -------------------------------#
-    
-            buildCentroidState(self.centroids, circuit, a, i, c, r, q)
-    
-            #----------------------------------------------------------------#
-    
-    
-            circuit.measure(r, outcome[0])
-    
-            circuit.h(a) 
-    
-            #return circuit
-    
-            circuit.measure(a, outcome[1])
-    
-            # measuring cluster bits
-            for b in range(C_qbits):
-                circuit.measure(c[b], outcome[b+2])
-    
-            # measuring qram bits
-            for b in range(QRAMINDEX_qbits):
-                circuit.measure(qramindex[b], outcome[b+2+C_qbits])
-    
-            simulator = Aer.get_backend('qasm_simulator')
-            job = execute(circuit, simulator, shots=self.shots)
-            result = job.result()
-            counts = result.get_counts(circuit)
-            #print("\nTotal counts are:",counts)
-            #plot_histogram(counts)
-            # qram-classe-ancilla-registro
-            
-            if check_prob:
-                r1 = {k: counts[k] for k in counts.keys() if k.endswith('1')}
-                r1_perc = (sum(r1.values())/self.shots)*100
-                r1_list.append(r1_perc)
-                
-                a0 = {k: r1[k] for k in r1.keys() if k.endswith('01')}
-                a0_perc = (sum(a0.values())/(sum(r1.values()))*100)
-                a0_list.append(a0_perc)
-            
-            
-            goodCounts = {k: counts[k] for k in counts.keys() if k.endswith('01')} 
-            #plot_histogram(goodCounts)
-    
-            for v in range(M1):
-                strformat = "{0:0" + str(QRAMINDEX_qbits) + "b}"
-                strbin = strformat.format(v)
-                vi_counts = {k: goodCounts[k] for k in goodCounts.keys() if k.startswith(strbin)} 
-    
-                if len(vi_counts) == 0:
-                    cluster = 0
-                else:
-                    count_sorted = sorted(((v,k) for k,v in vi_counts.items()))
-                    cluster = count_sorted[-1][1] # is the key related to the maximum count
-                    #cluster = max(vi_counts, key=vi_counts.get)
-                    cluster = int(cluster[QRAMINDEX_qbits:-2],2)
-    
-                #print('cluster prima ' + str(cluster))
-                ## SEMPLICE EURISTICA: QUANDO RESTITUISCO UN CLUSTER CHE NON ESISTE ALLORA PRENDO IL SECONDO PIU ALTO 
-                ind = 2
-                while cluster >= K:
-                    if ind > len(count_sorted):
-                        break
-                    cluster = count_sorted[-ind][1]
-                    cluster = int(cluster[QRAMINDEX_qbits:-2], 2)
-                    ind = ind + 1
-                if cluster >= K:
-                    cluster = 0
-    
-                #print('cluster dopo ' + str(cluster))
-                #print('------------------------------------------')
-    
-                cluster_assignment.append(cluster)
-                #print("vector " + str(i))
-                #print("Quantum assignment: " + str(cluster))    
-    
-            #df.loc[j*M1:(j+1)*M1-1,'cluster'] = cluster_assignment 
-        self.cluster_assignment = cluster_assignment
-        
-        if check_prob:
-            return round(sum(r1_list)/len(r1_list),3),round(sum(a0_list)/len(a0_list),3)
-        
-            
     
     """
     computing_centroids: 
@@ -468,8 +181,9 @@ class QKMeans():
         if self.old_centroids is None:
             return False
 
-        if np.linalg.norm(self.centroids-self.old_centroids, ord='fro') >= self.sc_tresh:
-            return False
+        with np.errstate(divide='ignore'):
+            if np.linalg.norm(self.centroids-self.old_centroids, ord='fro') >= self.sc_tresh:
+                return False
         
         return True
     
@@ -525,14 +239,9 @@ class QKMeans():
             
             print("iteration: " + str(self.ite))
             #print("Computing the distance between all vectors and all centroids and assigning the cluster to the vectors")
-            if self.quantization == 1:
-                hw_time = self.computing_cluster_1(provider)
-                self.execution_time_hw.append(hw_time)
-            elif self.quantization == 2:
-                hw_time = self.computing_cluster_2(provider)
-                self.execution_time_hw.append(hw_time)
-            else:
-                self.computing_cluster_3()
+            hw_time = self.computing_cluster(provider)
+            self.execution_time_hw.append(hw_time)
+
             #self.dataset.plot2Features(self.data, self.data.columns[0], self.data.columns[1], self.centroids, True)
     
             #print("Computing new centroids")
@@ -681,7 +390,7 @@ class QKMeans():
         fig, ax = plt.subplots()
         ax.plot(range(self.ite), self.similarity_list, marker="o")
         ax.set(xlabel='QKmeans iterations', ylabel='Similarity w.r.t classical assignment')
-        ax.set_title("K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) + ", M1 = " + str(self.M1) + ", shots = " + str(self.shots))
+        ax.set_title("K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) + ", shots = " + str(self.shots))
         #plt.show()
         dt = datetime.datetime.now().replace(microsecond=0)
         #str_dt = str(dt).replace(" ", "_")
@@ -694,7 +403,7 @@ class QKMeans():
             f.write("###### TEST " + str(process)+"_"+str(index_conf) + " on " + str(self.dataset_name) + " dataset\n")
             f.write("# Executed on " + str(dt) + "\n")
             f.write("## QKMEANS\n")
-            f.write("# Parameters: K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) + ", M1 = " + str(self.M1) + ", shots = " + str(self.shots) + "\n")
+            f.write("# Parameters: K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) + ", shots = " + str(self.shots) + "\n")
             f.write("# Iterations needed: " + str(self.ite) + "/" + str(self.max_iterations) + "\n")
             f.write('# Average iteration time: ' + str(avg_time) + 's \n')
             f.write('# Average similarity w.r.t classical assignment: ' + str(avg_sim) + '% \n')
@@ -716,5 +425,5 @@ class QKMeans():
     """
     def print_params(self, process=0, i=0):
         print("Process " + str(process) + " - configuration: " + str(i) + 
-              "\nParameters: K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) + ", M1 = " + str(self.M1) + ", shots = " + str(self.shots) + "\n")
+              "\nParameters: K = " + str(self.K) + ", M = " + str(self.M) + ", N = " + str(self.N) +  ", shots = " + str(self.shots) + "\n")
 
